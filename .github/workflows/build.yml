@@ -15,13 +15,17 @@ jobs:
         include:
           - os: windows-latest
             artifact: dsh-desktop-windows-x64
+            target: x86_64-pc-windows-msvc
             ext: .exe
           - os: macos-14
             artifact: dsh-desktop-darwin-arm64
-          - os: macos-13
+            target: aarch64-apple-darwin
+          - os: macos-14
             artifact: dsh-desktop-darwin-x64
+            target: x86_64-apple-darwin
           - os: ubuntu-22.04
             artifact: dsh-desktop-linux-x64
+            target: x86_64-unknown-linux-gnu
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -40,13 +44,15 @@ jobs:
             patchelf
 
       - name: Build (release)
-        run: cargo build --release
+        run: |
+          rustup target add "${{ matrix.target }}"
+          cargo build --release --target "${{ matrix.target }}"
 
       - name: Upload binary
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
-          path: target/release/dsh-desktop${{ matrix.ext }}
+          path: target/${{ matrix.target }}/release/dsh-desktop${{ matrix.ext }}
           if-no-files-found: error
 
   # Tag push (v*) → assemble the four platform binaries into one GitHub Release.
