@@ -1,0 +1,7 @@
+# Build artifacts
+target/
+gen/
+
+# System
+.DS_Store
+Thumbs.db

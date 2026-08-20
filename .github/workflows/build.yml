@@ -1,0 +1,50 @@
+# Build the host binary for Windows / macOS / Linux.
+# Run on: tag push (v*), manual dispatch.
+name: Build host binaries
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            artifact: dsh-desktop-windows-x64
+            ext: .exe
+          - os: macos-14
+            artifact: dsh-desktop-darwin-arm64
+          - os: macos-13
+            artifact: dsh-desktop-darwin-x64
+          - os: ubuntu-22.04
+            artifact: dsh-desktop-linux-x64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Linux dependencies
+        if: startsWith(matrix.os, 'ubuntu')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            libgtk-3-dev \
+            patchelf
+
+      - name: Build (release)
+        run: cargo build --release
+
+      - name: Upload binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: target/release/dsh-desktop${{ matrix.ext }}
+          if-no-files-found: error
