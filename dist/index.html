@@ -4,11 +4,41 @@
 <meta charset="UTF-8" />
 <title>DSH Desktop</title>
 <style>
-body{margin:0;background:#10141c;color:#e6eaf2;font-family:system-ui,"Segoe UI",sans-serif;display:flex;align-items:center;justify-content:center;height:100vh}
-p{opacity:.7;font-size:14px}
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    background: #0d0f0f;
+    color: #8b9490;
+    font-family: -apple-system, "Segoe UI", system-ui, sans-serif;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .splash { display: flex; flex-direction: column; align-items: center; gap: 18px; }
+  .mark {
+    width: 44px; height: 44px; border-radius: 10px;
+    background: linear-gradient(135deg, #1d2121, #141616);
+    border: 1px solid #262a2a;
+    display: flex; align-items: center; justify-content: center;
+    color: #4d6bfe; font-weight: 700; font-size: 20px; letter-spacing: -1px;
+  }
+  p { font-size: 13px; letter-spacing: .02em; }
+  .dot {
+    display: inline-block; width: 6px; height: 6px; border-radius: 50%;
+    background: #4d6bfe; margin-left: 8px;
+    animation: pulse 1.2s ease-in-out infinite;
+  }
+  @keyframes pulse {
+    0%, 100% { opacity: .25; transform: scale(.8); }
+    50% { opacity: 1; transform: scale(1); }
+  }
 </style>
 </head>
 <body>
-<p>正在连接 dsh 服务…</p>
+  <div class="splash">
+    <div class="mark">DSH</div>
+    <p>正在连接 dsh 服务<span class="dot"></span></p>
+  </div>
 </body>
 </html>

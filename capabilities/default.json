@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "默认能力：事件监听与命令调用",
-  "windows": ["main"],
+  "description": "默认能力：事件监听与命令调用（主窗口 + 面板弹窗）",
+  "windows": ["main", "panel"],
   "permissions": ["core:default"]
 }

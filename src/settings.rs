@@ -9,6 +9,13 @@ pub struct Settings {
     pub port: u16,
     pub check_updates_on_launch: bool,
     pub auto_restart: bool,
+    /// 开机自启（托盘开关，状态持久化）
+    pub autostart: bool,
+    /// 主窗口状态（恢复上次的位置与尺寸）
+    pub win_x: Option<f64>,
+    pub win_y: Option<f64>,
+    pub win_w: Option<f64>,
+    pub win_h: Option<f64>,
 }
 
 impl Default for Settings {
@@ -21,6 +28,11 @@ impl Default for Settings {
             port: 3080,
             check_updates_on_launch: true,
             auto_restart: true,
+            autostart: false,
+            win_x: None,
+            win_y: None,
+            win_w: None,
+            win_h: None,
         }
     }
 }
