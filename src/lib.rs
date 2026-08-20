@@ -218,7 +218,7 @@ fn build_tray(app: &AppHandle) -> Result<(), tauri::Error> {
                 let handle = app.clone();
                 tauri::async_runtime::spawn(async move {
                     match server::restart(&handle).await {
-                        Ok(url) => emit_ready(&handle, &url),
+                        Ok(()) => emit(&handle, "ready", "dsh 服务已重启", ""),
                         Err(e) => emit(&handle, "error", &format!("重启失败：{}", e), ""),
                     }
                 });
@@ -359,15 +359,15 @@ fn start_update_poller(app: &AppHandle) {
 
 /* ---------------- 窗口状态 ---------------- */
 
-fn restore_window_bounds(
+fn restore_window_bounds<'a, M: tauri::Manager<tauri::Wry>>(
     app: &AppHandle,
-    builder: tauri::WebviewWindowBuilder<tauri::Wry>,
-) -> tauri::WebviewWindowBuilder<tauri::Wry> {
+    builder: tauri::WebviewWindowBuilder<'a, tauri::Wry, M>,
+) -> tauri::WebviewWindowBuilder<'a, tauri::Wry, M> {
     let st = app.state::<AppState>();
     let s = st.settings.lock().unwrap();
     match (s.win_x, s.win_y, s.win_w, s.win_h) {
         (Some(x), Some(y), Some(w), Some(h)) => builder
-            .position(x as f64, y as f64)
+            .position(x, y)
             .inner_size(w.max(900.0), h.max(620.0)),
         _ => builder,
     }
