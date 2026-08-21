@@ -1,0 +1,392 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>DSH 代码编辑器</title>
+<style>
+:root{--bg:#0d0f0f;--raise:#141617;--hover:#191c1c;--border:#232626;--text:#d8dcda;--dim:#7d8580;--faint:#5a615d;--accent:#4d6bfe;--green:#3fb68b;--amber:#d19a3d;--red:#e5534b}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%;overflow:hidden}
+body{font-family:-apple-system,"Segoe UI","Microsoft YaHei",system-ui,sans-serif;font-size:13px;line-height:1.55;background:var(--bg);color:var(--text);display:flex;flex-direction:column}
+#topbar{display:flex;align-items:center;gap:10px;padding:6px 12px;border-bottom:1px solid var(--border);background:var(--raise);flex:none;-webkit-app-region:drag}
+#topbar button,#topbar input{webkit-app-region:no-drag}
+.view-toggle{display:flex;border:1px solid var(--border);border-radius:6px;overflow:hidden;flex:none}
+.view-toggle button{border:none;border-radius:0;background:transparent;padding:5px 14px;color:var(--dim);font-size:12px}
+.view-toggle button.active{background:var(--hover);color:var(--text)}
+.view-toggle button:hover{color:var(--text)}
+#rootLabel{font-size:12px;color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:28vw}
+.spacer{flex:1}
+#quickOpen{display:none;width:280px;padding:5px 10px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text);font-size:13px;outline:none}
+#quickOpen:focus{border-color:var(--accent)}
+#status{font-size:11.5px;color:var(--faint)}
+button{font:inherit;font-size:12px;padding:6px 12px;border-radius:6px;border:1px solid var(--border);background:var(--hover);color:var(--text);cursor:pointer}
+button:hover{border-color:var(--accent)}
+button:disabled{opacity:.4;cursor:not-allowed}
+a{color:var(--accent);text-decoration:none}
+.badge{font-size:11px;padding:2px 8px;border-radius:12px;border:1px solid var(--border)}
+.badge.ok{color:var(--green);border-color:var(--green)}
+.badge.bad{color:var(--red);border-color:var(--red)}
+#main{flex:1;display:flex;min-height:0}
+#chatPane{width:320px;flex:none;display:flex;flex-direction:column;border-right:1px solid var(--border);min-width:0;background:var(--bg)}
+#chatPane.hidden,#treePane.hidden{display:none}
+.pane-head{display:flex;align-items:center;gap:6px;padding:5px 10px;border-bottom:1px solid var(--border);font-size:10.5px;color:var(--faint);letter-spacing:.1em;text-transform:uppercase;flex:none}
+.pane-head .grow{flex:1}
+#chatFrame{flex:1;border:none;width:100%;background:#fff}
+#chatResize{width:4px;flex:none;cursor:col-resize;background:transparent}
+#chatResize:hover,#chatResize.drag{background:var(--accent)}
+#treePane{width:220px;flex:none;display:flex;flex-direction:column;border-right:1px solid var(--border);min-width:0;overflow:hidden}
+#tree{flex:1;overflow:auto;padding:6px 0;font-size:12.5px}
+#tree .node{padding:3px 10px;cursor:pointer;display:flex;gap:6px;align-items:center;white-space:nowrap;user-select:none}
+#tree .node:hover{background:var(--hover)}
+#tree .node.active{background:#1b1e2a}
+#tree .caret{display:inline-block;width:10px;color:var(--faint);transition:transform .1s}
+#tree .node.open>.caret{transform:rotate(90deg)}
+#tree .children{padding-left:14px}
+#tree .node .nm{overflow:hidden;text-overflow:ellipsis}
+#editorPane{flex:1;display:flex;flex-direction:column;min-width:0}
+#tabs{display:flex;overflow-x:auto;border-bottom:1px solid var(--border);background:var(--raise);flex:none}
+.tab{display:flex;align-items:center;gap:6px;padding:6px 12px;font-size:12px;color:var(--dim);border-right:1px solid var(--border);cursor:pointer;max-width:180px;white-space:nowrap;flex:none}
+.tab .nm{overflow:hidden;text-overflow:ellipsis}
+.tab.active{background:var(--bg);color:var(--text)}
+.tab .dot{width:7px;height:7px;border-radius:50%;background:var(--amber);flex:none}
+.tab .reload{margin-left:2px;color:var(--amber);font-size:11px;padding:0 3px;border-radius:3px;cursor:pointer}
+.tab .reload:hover{background:var(--hover);color:var(--text)}
+.tab .x{margin-left:2px;color:var(--faint);font-size:11px;padding:0 3px;border-radius:3px}
+.tab .x:hover{background:var(--hover);color:var(--text)}
+#editorHost{flex:1;min-height:0;position:relative}
+#editorHost .fallback{position:absolute;inset:0;width:100%;height:100%;background:#0a0b0b;color:var(--text);border:none;padding:12px;font:13px/1.6 Consolas,"Cascadia Mono",monospace;resize:none;outline:none}
+#empty{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:var(--faint);font-size:12.5px}
+#statusbar{display:flex;gap:16px;padding:3px 12px;font-size:11px;color:var(--faint);border-top:1px solid var(--border);background:var(--raise);flex:none}
+#statusbar .sb{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#statusbar .grow{flex:1}
+#err{color:var(--red);font-size:12px;padding:4px 14px;background:var(--raise);border-top:1px solid var(--border);display:none;flex:none}
+#toast{position:fixed;left:50%;bottom:36px;transform:translateX(-50%);background:#16181c;border:1px solid var(--border);color:var(--text);padding:8px 16px;border-radius:8px;font-size:12px;z-index:100000;display:none;box-shadow:0 6px 24px rgba(0,0,0,.45);max-width:70vw;text-align:center}
+/* 快速打开下拉 */
+#qoResults{display:none;position:fixed;top:66px;left:30%;width:420px;max-height:420px;overflow:auto;background:var(--raise);border:1px solid var(--border);border-radius:8px;z-index:9999;box-shadow:0 8px 32px rgba(0,0,0,.55)}
+#qoResults .item{padding:8px 14px;cursor:pointer;font-size:12.5px;color:var(--text);border-bottom:1px solid var(--border);display:flex;align-items:center;gap:8px}
+#qoResults .item:last-child{border-bottom:none}
+#qoResults .item:hover,#qoResults .item.active{background:var(--hover)}
+#qoResults .item .match{color:var(--accent)}
+#qoResults .item .path{color:var(--dim);font-size:11px;margin-left:auto}
+</style>
+</head>
+<body>
+<div id="topbar">
+  <div class="view-toggle">
+    <button id="viewChat" title="返回对话（Ctrl+B）">对话</button>
+    <button id="viewCode" class="active">代码</button>
+  </div>
+  <span class="root" id="rootLabel">/</span>
+  <span class="spacer"></span>
+  <button id="btnQuickOpen" title="快速打开文件（Ctrl+P）">⌘P</button>
+  <input id="quickOpen" type="text" placeholder="快速打开…" />
+  <button id="refreshTree">刷新</button>
+  <span id="status"></span>
+</div>
+<div id="main">
+  <div id="chatPane">
+    <div class="pane-head"><span class="grow">对话</span><button id="chatCollapse" title="收起">»</button></div>
+    <iframe id="chatFrame" src="about:blank" title="DSH 对话"></iframe>
+  </div>
+  <div id="chatResize"></div>
+  <div id="treePane">
+    <div class="pane-head"><span class="grow">文件</span><button id="treeCollapse" title="收起">»</button></div>
+    <div id="tree"></div>
+  </div>
+  <div id="editorPane">
+    <div id="tabs"></div>
+    <div id="editorHost"><div id="empty">从文件树选择一个文件开始编辑（Ctrl+S 保存 · Ctrl+P 快速打开）</div></div>
+    <div id="statusbar">
+      <span class="sb" id="sbFile">未打开文件</span>
+      <span class="sb" id="sbLang"></span>
+      <span class="sb" id="sbPos"></span>
+      <span class="grow"></span>
+      <span class="sb" id="sbSave"></span>
+    </div>
+  </div>
+</div>
+<div id="err"></div>
+<div id="toast"></div>
+<div id="qoResults"></div>
+<script>
+(function () {
+  'use strict';
+  var $ = function (id) { return document.getElementById(id); };
+  var invoke = window.__TAURI__.core.invoke;
+  var listen = window.__TAURI__.event.listen;
+
+  var tabs = [];
+  var activePath = null;
+  var monacoReady = false, editor = null, fallback = null;
+  var contents = {}, models = {};
+  var currentRoot = '', currentPort = 3080, chatUrl = '';
+  var expandedDirs = {};
+  var watchNext = 0, suppressDirty = false;
+  var treeRefreshPending = false, toastTimer = null;
+  var fileCache = []; // {path, name}
+
+  var CDNS = [
+    { css: 'https://registry.npmmirror.com/monaco-editor/0.52.0/files/min/vs/editor/editor.main.min.css', js: 'https://registry.npmmirror.com/monaco-editor/0.52.0/files/min/vs/loader.js', vs: 'https://registry.npmmirror.com/monaco-editor/0.52.0/files/min/vs' },
+    { css: 'https://cdn.jsdelivr.net/npm/monaco-editor@0.52.0/min/vs/editor/editor.main.min.css', js: 'https://cdn.jsdelivr.net/npm/monaco-editor@0.52.0/min/vs/loader.js', vs: 'https://cdn.jsdelivr.net/npm/monaco-editor@0.52.0/min/vs' }
+  ];
+  var LANG = {js:'javascript',mjs:'javascript',ts:'typescript',tsx:'typescript',json:'json',md:'markdown',html:'html',css:'css',py:'python',rs:'rust',go:'go',java:'java',c:'c',cpp:'cpp',yml:'yaml',sh:'shell',ps1:'powershell',txt:'plaintext',log:'plaintext'};
+  function langOf(n) { var i = n.lastIndexOf('.'); return (i >= 0 && LANG[n.slice(i+1).toLowerCase()]) ? LANG[n.slice(i+1).toLowerCase()] : 'plaintext'; }
+  function baseOf(p) { var i = Math.max(p.lastIndexOf('/'), p.lastIndexOf('\\')); return i >= 0 ? p.slice(i+1) : p; }
+  function relOf(abs) { return abs.indexOf(currentRoot) === 0 ? abs.slice(currentRoot.length).replace(/^[/\\]/, '') : abs; }
+  function toast(m) { var t = $('toast'); t.textContent = m; t.style.display = 'block'; if (toastTimer) clearTimeout(toastTimer); toastTimer = setTimeout(function () { t.style.display = 'none'; }, 2600); }
+  function setStatus(t) { $('status').textContent = t || ''; }
+  function showErr(t) { var e = $('err'); e.textContent = t || ''; e.style.display = t ? 'block' : 'none'; }
+  function scheduleTreeRefresh() { if (!treeRefreshPending) { treeRefreshPending = true; setTimeout(function () { treeRefreshPending = false; if (!$('treePane').classList.contains('hidden')) refreshTree(); }, 600); } }
+
+  /* ---------- Monaco 按需加载 ---------- */
+  function loadMonaco() {
+    return new Promise(function (resolve) {
+      if (window.monaco) { resolve(true); return; }
+      var attempt = function (i) {
+        if (i >= CDNS.length) { resolve(false); return; }
+        var c = CDNS[i], done = false;
+        var timeout = setTimeout(function () { if (!done) { done = true; attempt(i + 1); } }, 8000);
+        var link = document.createElement('link');
+        link.rel = 'stylesheet'; link.href = c.css;
+        document.head.appendChild(link);
+        var s = document.createElement('script'); s.src = c.js;
+        s.onload = function () { try { require.config({ paths: { vs: c.vs } }); require(['vs/editor/editor.main'], function () { if (!done) { done = true; clearTimeout(timeout); resolve(true); } }); } catch (e) { if (!done) { done = true; clearTimeout(timeout); attempt(i + 1); } } };
+        s.onerror = function () { if (!done) { done = true; clearTimeout(timeout); attempt(i + 1); } };
+        document.head.appendChild(s);
+      };
+      attempt(0);
+    });
+  }
+
+  /* ---------- 文件树（IPC）---------- */
+  function loadDir(dir, container) {
+    invoke('editor_list_files', { dir: dir, maxDepth: 1 }).then(function (entries) {
+      container.innerHTML = '';
+      for (var i = 0; i < entries.length; i++) {
+        var it = entries[i];
+        var row = document.createElement('div');
+        row.className = 'node' + (it.is_dir ? ' dir' : '');
+        row.setAttribute('data-path', it.path);
+        if (it.is_dir) {
+          var caret = document.createElement('span');
+          caret.className = 'caret'; caret.textContent = '▸'; row.appendChild(caret);
+        }
+        var nm = document.createElement('span'); nm.className = 'nm';
+        nm.textContent = (it.is_dir ? '📁 ' : '📄 ') + it.name;
+        row.appendChild(nm);
+        if (it.is_dir) {
+          var child = document.createElement('div');
+          child.className = 'children'; child.style.display = 'none';
+          (function (path, r, c) {
+            r.addEventListener('click', function (ev) {
+              ev.stopPropagation();
+              var open = c.style.display !== 'none';
+              c.style.display = open ? 'none' : 'block';
+              r.classList.toggle('open', !open);
+              if (open) delete expandedDirs[path]; else expandedDirs[path] = 1;
+              if (!open && !c.getAttribute('data-loaded')) { c.setAttribute('data-loaded', '1'); loadDir(path, c); }
+            });
+            if (expandedDirs[path]) { c.style.display = 'block'; r.classList.add('open'); c.setAttribute('data-loaded', '1'); loadDir(path, c); }
+          })(it.path, row, child);
+          container.appendChild(row); container.appendChild(child);
+        } else {
+          (function (path, r) { r.addEventListener('click', function (ev) { ev.stopPropagation(); openFile(path); }); })(it.path, row);
+          container.appendChild(row);
+        }
+      }
+    }).catch(function (e) { showErr('目录加载失败：' + e); });
+  }
+  function refreshTree() { loadDir(currentRoot, $('tree')); }
+
+  /* ---------- 打开/保存（IPC）---------- */
+  function openFile(path) {
+    showErr('');
+    invoke('editor_read_file', { path: path }).then(function (content) {
+      if (!tabs.some(function (t) { return t.path === path; })) {
+        tabs.push({ path: path, name: baseOf(path), dirty: false, diskChanged: false, deleted: false });
+      }
+      contents[path] = content;
+      activePath = path;
+      renderTabs(); setTreeActive(path); showInEditor(path);
+    }).catch(function (e) { showErr('打开失败：' + e); });
+  }
+  function showInEditor(path) {
+    var host = $('editorHost');
+    var empty = $('empty'); if (empty) empty.remove();
+    if (monacoReady && editor) {
+      if (fallback) { fallback.remove(); fallback = null; }
+      if (!models[path]) {
+        models[path] = monaco.editor.createModel(contents[path] || '', langOf(path));
+        models[path].onDidChangeModelContent(function () { if (!suppressDirty) setTabDirty(path, true); });
+      }
+      editor.setModel(models[path]); editor.focus();
+    } else {
+      if (!fallback) { fallback = document.createElement('textarea'); fallback.className = 'fallback'; host.appendChild(fallback); }
+      fallback.value = contents[path] || ''; fallback.focus();
+    }
+    updateStatusbar();
+  }
+  function reloadFile(path, force) {
+    var t = tabs.find(function (x) { return x.path === path; });
+    if (!t) return;
+    if (!force && t.dirty && !confirm('文件「' + t.name + '」有未保存修改，重新加载将丢失，确定？')) return;
+    invoke('editor_read_file', { path: path }).then(function (content) {
+      contents[path] = content; t.dirty = false; t.diskChanged = false; t.deleted = false;
+      if (monacoReady && editor && models[path]) {
+        suppressDirty = true; models[path].setValue(content); suppressDirty = false;
+        if (activePath === path) { editor.setModel(models[path]); editor.focus(); }
+      } else if (activePath === path && fallback) { fallback.value = content; }
+      renderTabs(); updateStatusbar();
+    }).catch(function (e) { showErr('重载失败：' + e); });
+  }
+  function saveFile() {
+    if (!activePath) return;
+    var content = monacoReady && editor ? editor.getValue() : (fallback ? fallback.value : '');
+    setStatus('保存中…');
+    invoke('editor_write_file', { path: activePath, content: content }).then(function () {
+      contents[activePath] = content; setTabDirty(activePath, false); flash('✓ 已保存');
+    }).catch(function (e) { showErr('保存失败：' + e); setStatus(''); });
+  }
+  function closeTab(path, force) {
+    var idx = tabs.findIndex(function (t) { return t.path === path; });
+    if (idx < 0) return;
+    if (!force && tabs[idx].dirty && !confirm('文件「' + tabs[idx].name + '」未保存，确定关闭？')) return;
+    tabs.splice(idx, 1); delete contents[path];
+    if (models[path]) { models[path].dispose(); delete models[path]; }
+    if (activePath === path) { activePath = tabs.length ? tabs[tabs.length - 1].path : null; if (activePath) showInEditor(activePath); else resetEditor(); }
+    renderTabs(); setTreeActive(activePath);
+  }
+  function resetEditor() {
+    if (editor && monacoReady) editor.setModel(null);
+    if (fallback) { fallback.value = ''; }
+    var host = $('editorHost');
+    if (!$('empty')) { var e = document.createElement('div'); e.id = 'empty'; e.textContent = '从文件树选择一个文件（Ctrl+S 保存 · Ctrl+P 快速打开）'; host.appendChild(e); }
+    updateStatusbar();
+  }
+  function setTabDirty(path, dirty) {
+    var t = tabs.find(function (x) { return x.path === path; });
+    if (t && t.dirty !== dirty) { t.dirty = dirty; renderTabs(); updateStatusbar(); }
+  }
+  function flash(t) { var s = $('sbSave'); s.textContent = t; setTimeout(function () { if (s.textContent === t) s.textContent = ''; }, 1600); }
+  function renderTabs() {
+    var box = $('tabs'); box.innerHTML = '';
+    for (var i = 0; i < tabs.length; i++) {
+      var t = tabs[i], tab = document.createElement('div');
+      tab.className = 'tab' + (t.path === activePath ? ' active' : '');
+      var nm = document.createElement('span'); nm.className = 'nm'; nm.textContent = t.name; tab.appendChild(nm);
+      if (t.dirty) { var dot = document.createElement('span'); dot.className = 'dot'; tab.appendChild(dot); }
+      if (t.diskChanged && !t.deleted) { var rb = document.createElement('span'); rb.className = 'reload'; rb.textContent = '↻'; (function(p){rb.onclick=function(ev){ev.stopPropagation();reloadFile(p);}})(t.path); tab.appendChild(rb); }
+      if (t.deleted) { var db = document.createElement('span'); db.className = 'reload'; db.textContent = '✕'; (function(p){db.onclick=function(ev){ev.stopPropagation();closeTab(p,true);}})(t.path); tab.appendChild(db); }
+      var x = document.createElement('span'); x.className = 'x'; x.textContent = '×';
+      (function (p) { tab.onclick = function () { activePath = p; renderTabs(); setTreeActive(p); showInEditor(p); }; x.onclick = function (ev) { ev.stopPropagation(); closeTab(p); }; })(t.path);
+      tab.appendChild(x); box.appendChild(tab);
+    }
+  }
+  function setTreeActive(path) {
+    document.querySelectorAll('#tree .node.active').forEach(function (n) { n.classList.remove('active'); });
+    if (path) { var h = document.querySelector('#tree .node[data-path="' + path.replace(/"/g, '&quot;') + '"]'); if (h) h.classList.add('active'); }
+  }
+  function updateStatusbar() {
+    $('sbFile').textContent = activePath || '未打开文件';
+    $('sbLang').textContent = activePath ? langOf(activePath) : '';
+    var t = tabs.find(function (x) { return x.path === activePath; });
+    $('sbSave').textContent = t && t.dirty ? '● 未保存' : '';
+  }
+
+  /* ---------- 快速打开 Cmd+P（Zed 式）---------- */
+  function showQuickOpen() {
+    $('quickOpen').style.display = 'inline-block';
+    $('quickOpen').value = '';
+    $('quickOpen').focus();
+    $('qoResults').style.display = 'none';
+  }
+  function hideQuickOpen() {
+    $('quickOpen').style.display = 'none';
+    $('qoResults').style.display = 'none';
+  }
+  function doQOSearch(query) {
+    if (!query.trim()) { $('qoResults').style.display = 'none'; return; }
+    invoke('editor_search_files', { query: query }).then(function (results) {
+      var box = $('qoResults');
+      if (!results || !results.length) { box.innerHTML = '<div class="item" style="color:var(--faint)">无结果</div>'; box.style.display = 'block'; return; }
+      box.innerHTML = '';
+      for (var i = 0; i < results.length; i++) {
+        var r = results[i], item = document.createElement('div');
+        item.className = 'item'; item.textContent = r.name;
+        var sp = document.createElement('span'); sp.className = 'path'; sp.textContent = relOf(r.path);
+        item.appendChild(sp);
+        (function (p) { item.onclick = function () { openFile(p); hideQuickOpen(); }; })(r.path);
+        box.appendChild(item);
+      }
+      box.style.display = 'block';
+    });
+  }
+
+  /* ---------- 侧栏折叠/拖动 ---------- */
+  var chatHidden = false, treeHidden = false;
+  $('chatCollapse').onclick = function () { chatHidden = !chatHidden; $('chatPane').classList.toggle('hidden', chatHidden); $('chatResize').style.display = chatHidden ? 'none' : 'block'; $('chatCollapse').textContent = chatHidden ? '«' : '»'; if (editor) editor.layout(); };
+  $('treeCollapse').onclick = function () { treeHidden = !treeHidden; $('treePane').classList.toggle('hidden', treeHidden); $('treeCollapse').textContent = treeHidden ? '«' : '»'; if (editor) editor.layout(); };
+  (function () {
+    var pane = $('chatPane'), handle = $('chatResize');
+    handle.addEventListener('mousedown', function (e) {
+      e.preventDefault(); handle.classList.add('drag');
+      var startX = e.clientX, startW = pane.offsetWidth;
+      var move = function (ev) { pane.style.width = Math.max(180, Math.min(window.innerWidth * 0.5, startW + (ev.clientX - startX))) + 'px'; };
+      var up = function () { handle.classList.remove('drag'); document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up); if (editor) editor.layout(); };
+      document.addEventListener('mousemove', move); document.addEventListener('mouseup', up);
+    });
+  })();
+
+  /* ---------- 文件变更监听（IPC 事件）---------- */
+  listen('editor:file-changed', function (event) {
+    var changedPath = event.payload && event.payload.path;
+    if (!changedPath) return;
+    // 刷新文件树
+    scheduleTreeRefresh();
+    // 检查打开的标签
+    for (var j = 0; j < tabs.length; j++) {
+      var tabPath = tabs[j].path;
+      if (relOf(tabPath) === changedPath || tabPath === changedPath || changedPath.indexOf(tabPath + '/') === 0 || relOf(tabPath).indexOf(changedPath + '/') === 0) {
+        if (!tabs[j].dirty) { tabs[j].diskChanged = true; reloadFile(tabPath, true); }
+      }
+    }
+  });
+
+  /* ---------- 初始化 ---------- */
+  $('viewChat').onclick = function () { /* 主窗口对话视图在主窗口切换，此窗口不处理 */ };
+  $('viewCode').onclick = function () { /* 已在代码视图 */ };
+  $('refreshTree').onclick = function () { refreshTree(); };
+  $('btnQuickOpen').onclick = showQuickOpen;
+  $('quickOpen').oninput = function () { doQOSearch(this.value); };
+  $('quickOpen').onblur = function () { setTimeout(hideQuickOpen, 200); };
+  $('quickOpen').onkeydown = function (ev) {
+    if (ev.key === 'Escape') { hideQuickOpen(); }
+    if (ev.key === 'Enter') { var active = $('qoResults').querySelector('.item.active') || $('qoResults').querySelector('.item'); if (active) active.click(); }
+  };
+  document.addEventListener('keydown', function (e) {
+    if ((e.ctrlKey || e.metaKey) && e.key === 's') { e.preventDefault(); saveFile(); }
+    if ((e.ctrlKey || e.metaKey) && e.key === 'p') { e.preventDefault(); showQuickOpen(); }
+    if ((e.ctrlKey || e.metaKey) && e.key === 'b') { e.preventDefault(); try { window.__TAURI__.window.appWindow.hide(); } catch (x) {} }
+  });
+
+  // 首次加载：获取配置 → 设置 iframe → 刷新树 → 加载 Monaco
+  invoke('editor_get_config', { port: currentPort, workspaceRoot: currentRoot }).then(function (cfg) {
+    currentPort = cfg.port;
+    currentRoot = cfg.workspace_root;
+    chatUrl = 'http://127.0.0.1:' + currentPort + '/';
+    $('rootLabel').textContent = currentRoot;
+    $('chatFrame').src = chatUrl;
+    refreshTree();
+  });
+  loadMonaco().then(function (ok) {
+    if (ok) {
+      monacoReady = true;
+      editor = monaco.editor.create($('editorHost'), { theme: 'vs-dark', automaticLayout: true, fontSize: 13, minimap: { enabled: false }, scrollBeyondLastLine: false, tabSize: 2 });
+      editor.onDidChangeCursorPosition(function (e) { $('sbPos').textContent = 'Ln ' + e.position.lineNumber + ', Col ' + e.position.column; });
+    } else { setStatus('Monaco 加载失败，已使用内置编辑器'); }
+  });
+})();
+</script>
+</body>
+</html>

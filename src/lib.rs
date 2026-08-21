@@ -4,7 +4,7 @@ mod settings;
 
 use std::io::{Read, Write};
 use std::net::TcpStream;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU32};
 use std::sync::Mutex;
 use std::time::Duration;
@@ -13,6 +13,185 @@ use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_autostart::ManagerExt;
+use notify::Watcher;
+
+/* ==================== 编辑器状态 ==================== */
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct FileEntry { pub name: String, pub path: String, pub is_dir: bool, pub size: u64 }
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct SearchResult { pub name: String, pub path: String, pub score: i64 }
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct EditorConfig { pub port: u16, pub workspace_root: String }
+
+pub struct FileCache { pub files: Vec<(String, String)> }
+impl Default for FileCache { fn default() -> Self { Self { files: Vec::new() } } }
+
+pub struct EditorState { pub file_cache: Mutex<FileCache> }
+impl Default for EditorState {
+    fn default() -> Self { Self { file_cache: Mutex::new(FileCache::default()) } }
+}
+
+/* ==================== 编辑器 IPC 命令 ==================== */
+
+const EDITOR_SKIP_DIRS: &[&str] = &[
+    ".git","node_modules",".dsh",".cache","target","dist",".pnpm",
+    ".ignored_dsh-model-router",".vscode",".idea","desktop-host",
+];
+
+#[tauri::command]
+fn editor_list_files(dir: String, max_depth: Option<u32>) -> Result<Vec<FileEntry>, String> {
+    let root = PathBuf::from(&dir);
+    if !root.is_dir() { return Err("目录不存在".into()); }
+    let mut entries = Vec::new();
+    editor_walk_dir(&root, max_depth.unwrap_or(8), &mut entries, 0, 30_000);
+    Ok(entries)
+}
+
+#[tauri::command]
+fn editor_read_file(path: String) -> Result<String, String> {
+    std::fs::read_to_string(&path).map_err(|e| format!("读取失败：{}", e))
+}
+
+#[tauri::command]
+fn editor_write_file(path: String, content: String) -> Result<(), String> {
+    if Path::new(&path).is_dir() { return Err("路径是目录".into()); }
+    std::fs::write(&path, &content).map_err(|e| format!("写入失败：{}", e))
+}
+
+#[tauri::command]
+fn editor_get_config(app: AppHandle) -> Result<EditorConfig, String> {
+    let st = app.state::<AppState>();
+    let port = st.webPort.lock().map_err(|e| e.to_string())?.unwrap_or(3080);
+    let root = st.workspace_root.lock().map_err(|e| e.to_string())?.clone();
+    Ok(EditorConfig { port, workspace_root: root })
+}
+
+#[tauri::command]
+fn editor_search_files(app: AppHandle, query: String) -> Result<Vec<SearchResult>, String> {
+    let es = app.state::<EditorState>();
+    let cache = es.file_cache.lock().map_err(|e| e.to_string())?;
+    Ok(editor_fuzzy_search(&cache.files, &query))
+}
+
+fn editor_walk_dir(dir: &Path, max_depth: u32, out: &mut Vec<FileEntry>, depth: u32, limit: usize) {
+    if depth > max_depth || out.len() >= limit { return; }
+    let mut names: Vec<String> = match std::fs::read_dir(dir) {
+        Ok(rd) => rd.filter_map(|e| e.ok().map(|e| e.file_name().to_string_lossy().to_string())).collect(),
+        Err(_) => return,
+    };
+    names.sort();
+    for name in &names {
+        if out.len() >= limit { break; }
+        if EDITOR_SKIP_DIRS.contains(&name.as_str()) { continue; }
+        if name.starts_with('.') && name != ".env" && name != ".env.local" { continue; }
+        let full = dir.join(name);
+        let meta = match std::fs::metadata(&full) { Ok(m) => m, Err(_) => continue };
+        let rel = full.to_string_lossy().replace('\\', "/").to_string();
+        out.push(FileEntry { name: name.clone(), path: rel, is_dir: meta.is_dir(), size: if meta.is_file() { meta.len() } else { 0 } });
+        if meta.is_dir() { editor_walk_dir(&full, max_depth, out, depth + 1, limit); }
+    }
+}
+
+fn editor_fuzzy_search(files: &[(String, String)], query: &str) -> Vec<SearchResult> {
+    let q = query.to_lowercase();
+    let mut results: Vec<SearchResult> = files.iter().filter_map(|(rel, name)| {
+        let score = editor_fuzzy_score(&q, &name.to_lowercase());
+        if score > 0 { Some(SearchResult { name: name.clone(), path: rel.clone(), score }) } else { None }
+    }).collect();
+    results.sort_by(|a, b| b.score.cmp(&a.score));
+    results.truncate(20);
+    results
+}
+
+fn editor_fuzzy_score(query: &str, target: &str) -> i64 {
+    if query.is_empty() { return 1; }
+    if let Some(pos) = target.find(query) { return 10000 - pos as i64; }
+    if target.starts_with(query) { return 5000; }
+    let qc: Vec<char> = query.chars().collect();
+    let tc: Vec<char> = target.chars().collect();
+    let mut qi = 0;
+    let mut score: i64 = 0;
+    let mut prev: i64 = -1;
+    for (ti, ch) in tc.iter().enumerate() {
+        if qi >= qc.len() { break; }
+        if *ch == qc[qi] { qi += 1; let gap = ti as i64 - prev - 1; score += 100 - gap * 5; if prev + 1 == ti as i64 { score += 50; } prev = ti as i64; }
+    }
+    if qi == qc.len() { score } else { 0 }
+}
+
+pub fn editor_populate_file_cache(dir: &str, files: &mut Vec<(String, String)>) {
+    files.clear();
+    editor_walk_cache(dir, files, 0, 8, 20_000);
+}
+
+fn editor_walk_cache(dir: &str, files: &mut Vec<(String, String)>, depth: u32, max_depth: u32, limit: usize) {
+    if depth > max_depth || files.len() >= limit { return; }
+    let rd = match std::fs::read_dir(dir) { Ok(r) => r, Err(_) => return };
+    for entry in rd.filter_map(|e| e.ok()) {
+        if files.len() >= limit { break; }
+        let name = entry.file_name().to_string_lossy().to_string();
+        if EDITOR_SKIP_DIRS.contains(&name.as_str()) { continue; }
+        if name.starts_with('.') && name != ".env" && name != ".env.local" { continue; }
+        let full = entry.path();
+        let meta = match std::fs::metadata(&full) { Ok(m) => m, Err(_) => continue };
+        if meta.is_file() {
+            files.push((full.to_string_lossy().replace('\\', "/").to_string(), name));
+        }
+        if meta.is_dir() {
+            editor_walk_cache(&full.to_string_lossy(), files, depth + 1, max_depth, limit);
+        }
+    }
+}
+
+/* ==================== 编辑器窗口管理 ==================== */
+
+fn open_editor_window(app: &AppHandle) {
+    if let Some(win) = app.get_webview_window("editor") {
+        let _ = win.show();
+        let _ = win.set_focus();
+        return;
+    }
+    let web_port = app.state::<AppState>().webPort.lock().unwrap().unwrap_or(3080);
+    let workspace = app.state::<AppState>().workspace_root.lock().unwrap().clone();
+    match tauri::WebviewWindowBuilder::new(app, "editor", tauri::WebviewUrl::App("editor.html".into()))
+        .title("DSH 编辑器").inner_size(1280.0, 860.0).min_inner_size(800.0, 520.0).center().build()
+    {
+        Ok(win) => {
+            log(app, &format!("编辑器窗口已打开（port={}, root={}）", web_port, workspace));
+            { let es = app.state::<EditorState>(); let mut c = es.file_cache.lock().unwrap(); c.files.clear(); editor_populate_file_cache(&workspace, &mut c.files); }
+            start_editor_watcher(app, &workspace);
+            let _ = win.set_focus();
+        }
+        Err(e) => log(app, &format!("打开编辑器窗口失败：{}", e)),
+    }
+}
+
+fn start_editor_watcher(app: &AppHandle, root: &str) {
+    let root_owned = root.to_string();
+    let app_for_watcher = app.clone();
+    let app_for_state = app.clone();
+    std::thread::spawn(move || {
+        let mut watcher = match notify::recommended_watcher(move |res: Result<notify::Event, notify::Error>| {
+            if let Ok(ev) = res {
+                for p in &ev.paths {
+                    if let Some(s) = p.to_str() {
+                        let _ = app_for_watcher.emit("editor:file-changed", serde_json::json!({"path": s, "kind": format!("{:?}", ev.kind)}));
+                    }
+                }
+            }
+        }) {
+            Ok(w) => w,
+            Err(e) => { log(&app_for_state, &format!("文件监听器启动失败：{}", e)); return; }
+        };
+        let _ = watcher.watch(Path::new(&root_owned), notify::RecursiveMode::Recursive);
+        log(&app_for_state, &format!("编辑器文件监听已启动：{}", root_owned));
+        { let es = app_for_state.state::<EditorState>(); let mut c = es.file_cache.lock().unwrap(); c.files.clear(); editor_populate_file_cache(&root_owned, &mut c.files); }
+        loop { std::thread::sleep(std::time::Duration::from_secs(3600)); }
+    });
+}
 
 pub struct AppState {
     pub settings: Mutex<settings::Settings>,
@@ -23,6 +202,10 @@ pub struct AppState {
     pub current_view: Mutex<String>,
     /// 主窗口缩放倍率（菜单"窗口"控制）
     pub zoom: Mutex<f64>,
+    /// dsh web 服务端口（bootstrap 时从 server.start_or_connect 获取）
+    pub webPort: Mutex<Option<u16>>,
+    /// 工作区根目录（设置中的 workspace 或启动参数）
+    pub workspace_root: Mutex<String>,
     pub was_ready: AtomicBool,
     pub restart_tries: AtomicU32,
     pub log_dir: PathBuf,
@@ -209,7 +392,7 @@ fn build_tray(app: &AppHandle) -> Result<(), tauri::Error> {
                 }
             }
             "tray-panel" => open_panel(app),
-            "tray-editor" => switch_view(app, "editor"),
+            "tray-editor" => open_editor_window(app),
             "tray-browser" => {
                 let _ = opener::open(base_url(app));
             }
@@ -449,7 +632,8 @@ async fn bootstrap(app: AppHandle, opts: LaunchOpts) {
                 s.port = p;
             }
             if let Some(w) = opts.workspace {
-                s.workspace = w;
+                s.workspace = w.clone();
+                *st.workspace_root.lock().unwrap() = w;
             }
         }
         match server::start_or_connect(&app).await {
@@ -464,6 +648,12 @@ async fn bootstrap(app: AppHandle, opts: LaunchOpts) {
     if let Some(win) = app.get_webview_window("main") {
         if let Ok(u) = tauri::Url::parse(&target) {
             let _ = win.navigate(u);
+        }
+    }
+    // 从已知 URL 中提取 web 端口，存入 AppState 供编辑器使用
+    if let Ok(u) = tauri::Url::parse(&target) {
+        if let Some(port) = u.port() {
+            *app.state::<AppState>().webPort.lock().unwrap() = Some(port);
         }
     }
     emit_ready(&app, &target);
@@ -506,6 +696,13 @@ pub fn run() {
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             Some(vec![]),
         ))
+        .invoke_handler(tauri::generate_handler![
+            editor_list_files,
+            editor_read_file,
+            editor_write_file,
+            editor_get_config,
+            editor_search_files,
+        ])
         .setup(move |app| {
             let user_data = app.path().app_data_dir().expect("无法获取应用数据目录");
             let _ = std::fs::create_dir_all(&user_data);
@@ -513,6 +710,7 @@ pub fn run() {
             let log_dir = user_data.clone();
             let runtime_dir = user_data.join("runtime");
             let settings = settings::Settings::load(&settings_file);
+            let workspace_root_str = settings.workspace.clone();
             app.manage(AppState {
                 settings: Mutex::new(settings),
                 server_child: Mutex::new(None),
@@ -520,12 +718,15 @@ pub fn run() {
                 current_url: Mutex::new(None),
                 current_view: Mutex::new("harness".to_string()),
                 zoom: Mutex::new(1.0),
+                webPort: Mutex::new(None),
+                workspace_root: Mutex::new(workspace_root_str),
                 was_ready: AtomicBool::new(false),
                 restart_tries: AtomicU32::new(0),
                 log_dir,
                 runtime_dir,
                 settings_file,
             });
+            app.manage(EditorState::default());
 
             // 同步开机自启状态到系统（settings.json 为真时保证已注册）
             {
@@ -588,7 +789,7 @@ pub fn run() {
         if let tauri::RunEvent::MenuEvent(ref event) = event {
             match event.id().as_ref() {
                 "view-panel" => switch_view(handle, "panel"),
-                "view-editor" => switch_view(handle, "editor"),
+                "view-editor" => open_editor_window(handle),
                 "view-harness" => switch_view(handle, "harness"),
                 "zoom-in" => {
                     let st = handle.state::<AppState>();
